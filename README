@@ -1,0 +1,5 @@
+sudo caffeinate -is caddy run
+https://user1.local/
+https://user2.local/
+https://user3.local/
+https://user4.local/
