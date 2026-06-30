@@ -1,8 +1,10 @@
 import React, { useMemo } from 'react';
-import alphasData from './submitted-alphas.json';
+import unfilteredAlphasData  from './submitted-alphas.json';
 import fieldsData from './wq_fields.json';
 
 const AlphaGrid = () => {
+  const alphasData = unfilteredAlphasData.filter((alpha) => alpha.regular?.code.includes("opt6"));
+  console.log(alphasData);
   // Create a Map for O(1) lookup performance, filtering out Grouping fields
   const fieldInfoMap = useMemo(() => {
     const map = new Map();

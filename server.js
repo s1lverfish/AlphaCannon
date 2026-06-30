@@ -13,17 +13,6 @@ const WAITING_FOR_SCOREDIFF = "WAITING_FOR_SCOREDIFF";
 const COMPLETED = "COMPLETED";
 const ERROR = "ERROR";
 
-let settings = {
-  region: "USA",
-  universe: "TOP500",
-  decay: 5,
-  neutralization: "INDUSTRY",
-  truncation: 0.08,
-  pasteurization: "ON",
-  nanHandling: "ON",
-  delay: 1,
-};
-
 let isRunning = false;
 let isHalting = false;
 let alphaList = [];
@@ -59,11 +48,22 @@ const addLog = (message) => {
 // 1. Endpoints
 app.post('/api/start', (req, res) => {
   const { alphas } = req.body;
-  alphaList = alphas.map((alpha) => ({ alphaCode: alpha }));
+  
+  // Expects frontend to send [{ alphaCode: "...", settings: {...} }]
+  alphaList = alphas;
+  
   alphaIdx = 0;
   isRunning = true;
-  addLog(`[Engine] Starting execution queue with ${alphaList.length} alphas.`); // LOG ADDED
+  addLog(`[Engine] Starting execution queue with ${alphaList.length} alphas.`);
   engineTick(); 
+  res.status(200).json({ success: true });
+});
+
+app.post('/api/appendQueue', (req, res) => {
+  const { alphas } = req.body;
+  
+  alphaList.push(...alphas);
+  
   res.status(200).json({ success: true });
 });
 
@@ -107,7 +107,7 @@ app.post('/api/getLogs', (req, res) => {
 const wqAuth = async (userId) => {
     const user = users.find(u => u.id === userId);
     if (!user || !user.email || !user.password) {
-        addLog(`[Auth Error] Missing credentials in memory for user ${userId}`); // CHANGED TO ADDLOG
+        addLog(`[Auth Error] Missing credentials in memory for user ${userId}`);
         return false;
     }
 
@@ -124,7 +124,7 @@ const wqAuth = async (userId) => {
         });
 
         if (wqRes.status !== 201) {
-            addLog(`[Auth Error] Request failed for ${userId} with status ${wqRes.status}`); // CHANGED TO ADDLOG
+            addLog(`[Auth Error] Request failed for ${userId} with status ${wqRes.status}`);
             return false;
         }
 
@@ -134,11 +134,11 @@ const wqAuth = async (userId) => {
             addLog(`[Auth] Successfully authenticated ${userId}`);
             return true;
         } else {
-            addLog(`[Auth Error] No cookies returned for ${userId}`); // CHANGED TO ADDLOG
+            addLog(`[Auth Error] No cookies returned for ${userId}`);
             return false;
         }
     } catch (err) {
-        addLog(`[Auth Error] Network exception for ${userId}: ${err.message}`); // CHANGED TO ADDLOG
+        addLog(`[Auth Error] Network exception for ${userId}: ${err.message}`);
         return false;
     }
 };
@@ -162,7 +162,6 @@ const executeWqQuery = async ({ cookie, method, path, payload }) => {
 
     const text = await wqRes.text();
     
-    // LOG ADDED: Expose payload formatting issues or server errors immediately
     if (wqRes.status >= 400) {
         addLog(`[API Response] HTTP ${wqRes.status} on ${path}. Body: ${text.substring(0, 150)}`);
     }
@@ -185,7 +184,6 @@ const wqQuery = (params) => {
                 const res = await executeWqQuery(params);
                 resolve(res);
             } catch (err) {
-                // LOG ADDED: Catch hard network failures in the queue
                 addLog(`[Queue Error] Request failed entirely: ${err.message}`);
                 reject(err);
             }
@@ -202,14 +200,13 @@ const handleResponseErrors = (workerState, status) => {
     sessionStore.delete(workerState.userId);
     addLog(`[Auth issue] User ${workerState.userId} hit ${status}. Session deleted.`);
   } else {
-    // CHANGED TO ADDLOG: Ensures frontend sees exactly which alpha crashed
     addLog(`[Worker Error] User ${workerState.userId} failed on alpha: ${workerState.alphaCode} - Status ${status}`);
     workerState.status = ERROR;
   }
 };
 
 const submitAlpha = async (workerState, cookie) => {
-  addLog(`[${workerState.userId}] Submitting alpha: ${workerState.alphaCode}`); // LOG ADDED
+  addLog(`[${workerState.userId}] Submitting alpha: ${workerState.alphaCode}`);
 
   const simRes = await wqQuery({
     cookie,
@@ -217,7 +214,13 @@ const submitAlpha = async (workerState, cookie) => {
     path: "/simulations",
     payload: {
       type: "REGULAR",
-      settings: { ...settings, language: "FASTEXPR", unitHandling: "VERIFY", visualization: false, instrumentType: "EQUITY" },
+      settings: { 
+          ...workerState.settings, // Injects the specific settings for this alpha
+          language: "FASTEXPR", 
+          unitHandling: "VERIFY", 
+          visualization: false, 
+          instrumentType: "EQUITY" 
+      },
       regular: workerState.alphaCode, 
     }
   });
@@ -251,10 +254,9 @@ const queryAlphaStatus = async (workerState, cookie) => {
       workerState.status = WAITING_FOR_RESULTS; 
       addLog(`[${userId}] ID ${simId} Processing completed, waiting for results.`);
     } else if (pollData.status === "ERROR" || pollData.error) {
-      addLog(`[${userId}] ID ${simId} Alpha computation returned an internal ERROR state.`); // LOG ADDED
+      addLog(`[${userId}] ID ${simId} Alpha computation returned an internal ERROR state.`);
       workerState.status = ERROR;
     } else {
-      //don't log progress every time
       (workerState.counter %5 === 0) && addLog(`[${userId}] ID ${simId} Progress: ${Math.round((pollData.progress || 0) * 100)}%`);
       workerState.counter++;
     }
@@ -283,7 +285,7 @@ const getAlphaResults = async (workerState, cookie) => {
     } else {
       results.push({ ...alphaData, code: workerState.alphaCode, scoreDiff: "N/A" });
       workerState.status = COMPLETED;
-      addLog(`[${workerState.userId}] Alpha compiled. Sharpe: ${currentSharpe || "N/A"}`); // LOG ADDED
+      addLog(`[${workerState.userId}] Alpha compiled. Sharpe: ${currentSharpe || "N/A"}`);
     }
   } else {
     handleResponseErrors(workerState, alphaRes.status);
@@ -350,7 +352,7 @@ const advanceWorkerState = async (workerState) => {
 
 const engineTick = async () => {
     while (isRunning) {
-        try { // GLOBAL LOOP TRY/CATCH ADDED
+        try { 
             // 1. Clean up finished workers
             activeWorkers = activeWorkers.filter(w => w.status !== "COMPLETED" && w.status !== "ERROR");
 
@@ -365,6 +367,7 @@ const engineTick = async () => {
                         const newWorkerState = {
                             userId: user.id,
                             alphaCode: newAlpha.alphaCode,
+                            settings: newAlpha.settings, // Store the settings config with the worker
                             status: WAITING_FOR_SUBMISSION
                         };
                         
@@ -379,10 +382,9 @@ const engineTick = async () => {
                 await advanceWorkerState(worker);
             }
             
-            // Safety sleep to prevent CPU spikes if activeWorkers drops to 0 but loop hasn't exited
             if (activeWorkers.length === 0) await sleep(2000); 
 
-            // 4. Halt Condition: No active workers AND (out of alphas OR told to halt)
+            // 4. Halt Condition
             if (activeWorkers.length === 0 && (alphaIdx >= alphaList.length || isHalting)) {
                 isRunning = false;
                 isHalting = false; 
