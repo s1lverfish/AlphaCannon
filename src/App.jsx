@@ -247,7 +247,6 @@ export default function App() {
           value={alphaInput}
           onChange={(e) => setAlphaInput(e.target.value)}
           placeholder="Paste alpha formulas here (one per line)..."
-          disabled={status.isRunning && !status.isHalting}
           style={{ width: "100%", height: "160px", border: "1px solid #d1d5db", borderRadius: "6px", padding: "12px", fontSize: "13px", fontFamily: "monospace", resize: "vertical", boxSizing: "border-box", outline: "none", transition: "border-color 0.2s", backgroundColor: (status.isRunning && !status.isHalting) ? "#f3f4f6" : "white" }}
         />
 
