@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import fs from 'fs';
 import { andris, mate, bence, levi } from "./passwords.js"; 
 
 const app = express();
@@ -12,6 +13,7 @@ const WAITING_FOR_RESULTS= "WAITING_FOR_RESULTS";
 const WAITING_FOR_SCOREDIFF = "WAITING_FOR_SCOREDIFF";
 const COMPLETED = "COMPLETED";
 const ERROR = "ERROR";
+const RESULTS_FILE = "./results.json";
 
 let isRunning = false;
 let isHalting = false;
@@ -26,6 +28,24 @@ let users = [
 ];
 
 let results = [];
+
+// Load existing results from disk on startup
+if (fs.existsSync(RESULTS_FILE)) {
+  try {
+    const data = fs.readFileSync(RESULTS_FILE, 'utf-8');
+    results = JSON.parse(data);
+    console.log(`[Init] Loaded ${results.length} results from ${RESULTS_FILE}`);
+  } catch (err) {
+    console.error(`[Init Error] Failed to parse ${RESULTS_FILE}, starting fresh.`, err);
+  }
+}
+
+const saveResults = () => {
+  fs.writeFile(RESULTS_FILE, JSON.stringify(results, null, 2), (err) => {
+    if (err) addLog(`[File Error] Failed to write to ${RESULTS_FILE}: ${err.message}`);
+  });
+};
+
 let serverLog = [];
 let activeWorkers = [];
 let globalApiQueue = Promise.resolve();
@@ -50,12 +70,17 @@ app.post('/api/start', (req, res) => {
   const { alphas } = req.body;
   
   // Expects frontend to send [{ alphaCode: "...", settings: {...} }]
-  alphaList = alphas;
+  alphaList.push(...alphas);
   
   alphaIdx = 0;
   isRunning = true;
   addLog(`[Engine] Starting execution queue with ${alphaList.length} alphas.`);
   engineTick(); 
+  res.status(200).json({ success: true });
+});
+
+app.post('/api/clearQueue', (req, res) => {
+  alphaList = alphaList.slice(0, Math.max(0, alphaIdx-1));
   res.status(200).json({ success: true });
 });
 
@@ -81,9 +106,11 @@ app.post('/api/status', (req, res) => {
     success: true,
     isRunning: isRunning,
     isHalting: isHalting,
-    activeWorkersCount: activeWorkers.length,
-    remainingAlphasCount: alphaList.length - alphaIdx,
-    resultsCount: results.length
+    logs: serverLog,
+    activeWorkers: activeWorkers,
+    alphas: alphaList,
+    currentAlpha: alphaIdx,
+    results: results
   });
 });
 
@@ -94,14 +121,6 @@ app.post('/api/getRemainingAlphas', (req, res) => {
     count: remaining.length, 
     remainingAlphas: remaining 
   });
-});
-
-app.post('/api/getResults', (req, res) => {
-  res.status(200).json({ success: true, results });
-});
-
-app.post('/api/getLogs', (req, res) => {
-  res.status(200).json({ success: true, logs: serverLog });
 });
 
 const wqAuth = async (userId) => {
@@ -215,7 +234,7 @@ const submitAlpha = async (workerState, cookie) => {
     payload: {
       type: "REGULAR",
       settings: { 
-          ...workerState.settings, // Injects the specific settings for this alpha
+          ...workerState.settings, 
           language: "FASTEXPR", 
           unitHandling: "VERIFY", 
           visualization: false, 
@@ -259,6 +278,7 @@ const queryAlphaStatus = async (workerState, cookie) => {
     } else {
       (workerState.counter %5 === 0) && addLog(`[${userId}] ID ${simId} Progress: ${Math.round((pollData.progress || 0) * 100)}%`);
       workerState.counter++;
+      workerState.progress = pollData.progress;
     }
   } else {
     handleResponseErrors(workerState, pollRes.status);
@@ -283,7 +303,8 @@ const getAlphaResults = async (workerState, cookie) => {
       workerState.alphaData = alphaData;
       workerState.status = WAITING_FOR_SCOREDIFF;
     } else {
-      results.push({ ...alphaData, code: workerState.alphaCode, scoreDiff: "N/A" });
+      results.push({ ...alphaData, code: workerState.alphaCode, scoreDiff: "N/A", timestamp: Date.now() });
+      saveResults(); // Persist changes
       workerState.status = COMPLETED;
       addLog(`[${workerState.userId}] Alpha compiled. Sharpe: ${currentSharpe || "N/A"}`);
     }
@@ -311,6 +332,7 @@ const getAlphaScoreDiff = async (workerState, cookie) => {
         scoreDiff,
         code: workerState.alphaCode, 
       });
+      saveResults(); // Persist changes
       workerState.status = COMPLETED;
     }
   } else {
